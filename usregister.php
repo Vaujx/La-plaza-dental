@@ -3,8 +3,8 @@
 require_once "config.php";
  
 // Define variables and initialize with empty values
-$username = $password = $confirm_password = "";
-$username_err = $password_err = $confirm_password_err = $terms_err = "";
+$username = $password = $confirm_password = $full_name = $email = $phone_number = "";
+$username_err = $password_err = $confirm_password_err = $terms_err = $full_name_err = $email_err = $phone_number_err = "";
  
 // Processing form data when form is submitted
 if($_SERVER["REQUEST_METHOD"] == "POST"){
@@ -12,6 +12,31 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
     // Validate terms agreement
     if(!isset($_POST["terms_agreement"])){
         $terms_err = "You must agree to the Terms and Conditions.";
+    }
+
+    // Validate full name
+    if(empty(trim($_POST["full_name"]))){
+        $full_name_err = "Please enter your full name.";
+    } else{
+        $full_name = trim($_POST["full_name"]);
+    }
+    
+    // Validate email
+    if(empty(trim($_POST["email"]))){
+        $email_err = "Please enter your email.";
+    } elseif(!filter_var(trim($_POST["email"]), FILTER_VALIDATE_EMAIL)){
+        $email_err = "Please enter a valid email address.";
+    } else{
+        $email = trim($_POST["email"]);
+    }
+    
+    // Validate phone number
+    if(empty(trim($_POST["phone_number"]))){
+        $phone_number_err = "Please enter your phone number.";
+    } elseif(!preg_match('/^[0-9\-$$$$\/\+\s]*$/', trim($_POST["phone_number"]))){
+        $phone_number_err = "Please enter a valid phone number.";
+    } else{
+        $phone_number = trim($_POST["phone_number"]);
     }
 
     // Validate username
@@ -66,19 +91,27 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
     }
     
     // Check input errors before inserting in database
-    if(empty($username_err) && empty($password_err) && empty($confirm_password_err) && empty($terms_err)){
+    if(empty($username_err) && empty($password_err) && empty($confirm_password_err) && empty($terms_err) && 
+       empty($full_name_err) && empty($email_err) && empty($phone_number_err)){
         
         // Prepare an insert statement
-        $sql = "INSERT INTO userss (username, password) VALUES (:username, :password)";
+        $sql = "INSERT INTO userss (username, password, full_name, email, phone_number) 
+                VALUES (:username, :password, :full_name, :email, :phone_number)";
          
         if($stmt = $pdo->prepare($sql)){
             // Bind variables to the prepared statement as parameters
             $stmt->bindParam(":username", $param_username, PDO::PARAM_STR);
             $stmt->bindParam(":password", $param_password, PDO::PARAM_STR);
+            $stmt->bindParam(":full_name", $param_full_name, PDO::PARAM_STR);
+            $stmt->bindParam(":email", $param_email, PDO::PARAM_STR);
+            $stmt->bindParam(":phone_number", $param_phone_number, PDO::PARAM_STR);
             
             // Set parameters
             $param_username = $username;
             $param_password = password_hash($password, PASSWORD_DEFAULT); // Creates a password hash
+            $param_full_name = $full_name;
+            $param_email = $email;
+            $param_phone_number = $phone_number;
             
             // Attempt to execute the prepared statement
             if($stmt->execute()){
@@ -184,6 +217,21 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
         <h2 class="text-center">Sign Up</h2>
         <p class="text-center">Please fill this form to create an account.</p>
         <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post">
+            <div class="form-group">
+                <label>Full Name</label>
+                <input type="text" name="full_name" class="form-control <?php echo (!empty($full_name_err)) ? 'is-invalid' : ''; ?>" value="<?php echo $full_name; ?>">
+                <span class="invalid-feedback"><?php echo $full_name_err; ?></span>
+            </div>
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" name="email" class="form-control <?php echo (!empty($email_err)) ? 'is-invalid' : ''; ?>" value="<?php echo $email; ?>">
+                <span class="invalid-feedback"><?php echo $email_err; ?></span>
+            </div>
+            <div class="form-group">
+                <label>Phone Number</label>
+                <input type="tel" name="phone_number" class="form-control <?php echo (!empty($phone_number_err)) ? 'is-invalid' : ''; ?>" value="<?php echo $phone_number; ?>">
+                <span class="invalid-feedback"><?php echo $phone_number_err; ?></span>
+            </div>
             <div class="form-group">
                 <label>Username</label>
                 <input type="text" name="username" class="form-control <?php echo (!empty($username_err)) ? 'is-invalid' : ''; ?>" value="<?php echo $username; ?>">
