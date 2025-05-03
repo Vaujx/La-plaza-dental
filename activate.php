@@ -58,7 +58,7 @@ if(isset($_GET["token"]) && !empty(trim($_GET["token"]))) {
 unset($pdo);
 ?>
 
-<!DOCTYPE html>
+&lt;!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
