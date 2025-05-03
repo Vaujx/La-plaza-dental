@@ -692,8 +692,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_admin'])) {
                         if (isset($admin_success)) {
                             echo '<div class="alert alert-success">' . $admin_success . '</div>';
                         }
-                        if (isset($admin_  . $admin_success . '</div>';
-                        }
                         if (isset($admin_error)) {
                             echo '<div class="alert alert-danger">' . $admin_error . '</div>';
                         }
