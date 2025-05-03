@@ -69,7 +69,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 }
             } else {
                 // Then: Try the users table (patients)
-                $sql_user = "SELECT id, username, password FROM userss WHERE username = :username";
+                $sql_user = "SELECT id, username, password, is_approved, is_activated FROM userss WHERE username = :username";
                 $stmt_user = $pdo->prepare($sql_user);
                 $stmt_user->bindParam(":username", $username, PDO::PARAM_STR);
                 $stmt_user->execute();
@@ -77,12 +77,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 if ($stmt_user->rowCount() == 1) {
                     $row = $stmt_user->fetch();
                     if (password_verify($password, $row["password"])) {
-                        $_SESSION["loggedin"] = true;
-                        $_SESSION["id"] = $row["id"];
-                        $_SESSION["username"] = $row["username"];
-                        $_SESSION["role"] = "patient";
-                        header("location: client_dashboard.php");
-                        exit;
+                        // Check if account is approved and activated
+                        if (!$row["is_approved"]) {
+                            $login_err = "Your account is pending approval by an administrator.";
+                        } elseif (!$row["is_activated"]) {
+                            $login_err = "Please check your email and activate your account before logging in.";
+                        } else {
+                            // Account is approved and activated, proceed with login
+                            $_SESSION["loggedin"] = true;
+                            $_SESSION["id"] = $row["id"];
+                            $_SESSION["username"] = $row["username"];
+                            $_SESSION["role"] = "patient";
+                            header("location: client_dashboard.php");
+                            exit;
+                        }
                     } else {
                         $login_err = "Invalid username or password.";
                     }
