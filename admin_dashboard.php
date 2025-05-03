@@ -26,10 +26,90 @@ function getAppointmentsByStatus($pdo, $status) {
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// Function to get pending user registrations
+function getPendingUsers($pdo) {
+    $sql = "SELECT id, username, full_name, email, phone_number FROM userss WHERE is_approved = FALSE ORDER BY id DESC";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute();
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
 // Get appointments by status
 $pendingAppointments = getAppointmentsByStatus($pdo, 'pending');
 $confirmedAppointments = getAppointmentsByStatus($pdo, 'confirmed');
 $cancelledAppointments = getAppointmentsByStatus($pdo, 'cancelled');
+
+// Get pending user registrations
+$pendingUsers = getPendingUsers($pdo);
+
+// Handle user approval
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['approve_user'])) {
+    $userId = $_POST['user_id'];
+    
+    // Generate activation token
+    $token = bin2hex(random_bytes(32));
+    
+    // Update user record
+    $sql = "UPDATE userss SET is_approved = TRUE, activation_token = :token WHERE id = :id";
+    $stmt = $pdo->prepare($sql);
+    $stmt->bindParam(":token", $token, PDO::PARAM_STR);
+    $stmt->bindParam(":id", $userId, PDO::PARAM_INT);
+    
+    if ($stmt->execute()) {
+        // Get user email
+        $sql = "SELECT email, full_name, username FROM userss WHERE id = :id";
+        $stmt = $pdo->prepare($sql);
+        $stmt->bindParam(":id", $userId, PDO::PARAM_INT);
+        $stmt->execute();
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($user) {
+            // Send activation email
+            $mail = new PHPMailer(true);
+            try {
+                $mail->isSMTP();
+                $mail->Host = 'smtp.gmail.com';
+                $mail->SMTPAuth = true;
+                $mail->Username = 'carigaimylot@gmail.com'; // Update with your email
+                $mail->Password = 'ujrt libk awwi zktz'; // Update with your app password
+                $mail->SMTPSecure = 'ssl';
+                $mail->Port = 465;
+
+                $mail->setFrom('your_email@gmail.com', 'LaPlaza Dental Clinic');
+                $mail->addAddress($user['email'], $user['full_name']);
+
+                // Create activation link
+                $activationLink = "http://" . $_SERVER['HTTP_HOST'] . "/activate.php?token=" . $token;
+
+                $mail->isHTML(true);
+                $mail->Subject = 'Account Activation - LaPlaza Dental Clinic';
+                $mail->Body = "
+                    <h2>Account Approved</h2>
+                    <p>Dear <strong>{$user['full_name']}</strong>,</p>
+                    <p>Your account has been approved by the administrator. Please click the link below to activate your account:</p>
+                    <p><a href='$activationLink'>Activate Your Account</a></p>
+                    <p>Or copy and paste this URL into your browser:</p>
+                    <p>$activationLink</p>
+                    <br>
+                    <p>Thank you,<br>LaPlaza Dental Clinic</p>
+                    <p><small>This is an automated message. Please do not reply.</small></p>
+                ";
+                $mail->AltBody = "Dear {$user['full_name']}, your account has been approved. Please activate your account by visiting: $activationLink";
+                $mail->send();
+                
+                $success_message = "User approved and activation email sent.";
+            } catch (Exception $e) {
+                error_log("Activation email failed: {$mail->ErrorInfo}");
+                $error_message = "User approved but failed to send activation email.";
+            }
+        }
+        
+        // Refresh pending users list
+        $pendingUsers = getPendingUsers($pdo);
+    } else {
+        $error_message = "Error approving user.";
+    }
+}
 
 // Handle appointment status update
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['appointment_id']) && isset($_POST['action'])) {
@@ -422,6 +502,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_admin'])) {
                     <li><button onclick="showTab('pendingTab')">Pending Appointment</button></li>
                     <li><button onclick="showTab('confirmedTab')">Confirmed Appointments</button></li>
                     <li><button onclick="showTab('cancelledTab')">Cancelled Appointments</button></li>
+                    <li><button onclick="showTab('usersTab')">User Approvals</button></li>
                     <li><button onclick="showTab('adminTab')">Admin Management</button></li>
                     <li>
                         <a href="backup.php" class="btn btn-success">📥 Backup</a>
@@ -561,6 +642,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_admin'])) {
                     </div>
                 </div>
                 
+                <!-- User Approvals Tab -->
+                <div id="usersTab" class="tab-content">
+                    <div class="dashboard-container">
+                        <h3>Pending User Approvals</h3>
+                        
+                        <?php if (count($pendingUsers) > 0): ?>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Username</th>
+                                        <th>Full Name</th>
+                                        <th>Email</th>
+                                        <th>Phone</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($pendingUsers as $user): ?>
+                                        <tr>
+                                            <td><?php echo $user['id']; ?></td>
+                                            <td><?php echo htmlspecialchars($user['username']); ?></td>
+                                            <td><?php echo htmlspecialchars($user['full_name']); ?></td>
+                                            <td><?php echo htmlspecialchars($user['email']); ?></td>
+                                            <td><?php echo htmlspecialchars($user['phone_number']); ?></td>
+                                            <td>
+                                                <form method="POST" class="d-inline">
+                                                    <input type="hidden" name="user_id" value="<?php echo $user['id']; ?>">
+                                                    <button type="submit" name="approve_user" class="btn-confirm">Approve User</button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        <?php else: ?>
+                            <p>No pending user approvals.</p>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
                 <!-- Admin Management Tab -->
                 <div id="adminTab" class="tab-content">
                     <div class="dashboard-container">
@@ -632,5 +754,125 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_admin'])) {
             }
         }
     </script>
+</body>
+</html>
+
+## 3. Create an Activation Page (activate.php)
+
+Here's the code for the activation page that users will be directed to when they click the link in their email:
+
+```php type="code"
+<?php
+// Include config file
+require_once "config.php";
+
+// Initialize variables
+$token = "";
+$message = "";
+$message_class = "";
+
+// Check if token is provided in URL
+if(isset($_GET["token"]) && !empty(trim($_GET["token"]))) {
+    $token = trim($_GET["token"]);
+    
+    // Prepare a select statement
+    $sql = "SELECT id, username, email, full_name FROM userss WHERE activation_token = :token AND is_approved = TRUE AND is_activated = FALSE";
+    
+    if($stmt = $pdo->prepare($sql)) {
+        // Bind variables to the prepared statement as parameters
+        $stmt->bindParam(":token", $token, PDO::PARAM_STR);
+        
+        // Attempt to execute the prepared statement
+        if($stmt->execute()) {
+            if($stmt->rowCount() == 1) {
+                // Fetch user data
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                // Update user as activated
+                $update_sql = "UPDATE userss SET is_activated = TRUE, activation_token = NULL WHERE id = :id";
+                if($update_stmt = $pdo->prepare($update_sql)) {
+                    $update_stmt->bindParam(":id", $user["id"], PDO::PARAM_INT);
+                    
+                    if($update_stmt->execute()) {
+                        $message = "Your account has been successfully activated. You can now <a href='index.php'>login</a> with your credentials.";
+                        $message_class = "success";
+                    } else {
+                        $message = "Oops! Something went wrong. Please try again later.";
+                        $message_class = "danger";
+                    }
+                }
+            } else {
+                $message = "Invalid activation link or your account is already activated.";
+                $message_class = "danger";
+            }
+        } else {
+            $message = "Oops! Something went wrong. Please try again later.";
+            $message_class = "danger";
+        }
+        
+        // Close statement
+        unset($stmt);
+    }
+} else {
+    $message = "Invalid activation link.";
+    $message_class = "danger";
+}
+
+// Close connection
+unset($pdo);
+?>
+
+&lt;!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Account Activation - LA PLAZA DENTISTA</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body {
+            background: linear-gradient(to right, #f0f2f5, #d9e2ec);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: Arial, sans-serif;
+        }
+        .wrapper {
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0px 5px 15px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #333;
+            font-family: times two roman;
+        }
+        .btn-primary {
+            background-color: #001F3F;
+            border: none;
+        }
+        .btn-primary:hover {
+            background-color: #003366;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <h1>LA PLAZA DENTISTA</h1>
+        <h2>Account Activation</h2>
+        
+        <div class="alert alert-<?php echo $message_class; ?>">
+            <?php echo $message; ?>
+        </div>
+        
+        <div class="mt-4">
+            <a href="index.php" class="btn btn-primary">Go to Login</a>
+        </div>
+    </div>
 </body>
 </html>
