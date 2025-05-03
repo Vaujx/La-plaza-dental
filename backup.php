@@ -23,6 +23,13 @@ function exportTableToCSV($pdo, $tableName) {
     $stmt->execute();
     $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Check if table is empty
+    if (empty($data)) {
+        return [
+            'empty' => true
+        ];
+    }
+    
     // Create CSV content
     $output = fopen('php://temp', 'w');
     fputcsv($output, $columns);
@@ -37,40 +44,55 @@ function exportTableToCSV($pdo, $tableName) {
     
     return [
         'filename' => $filename,
-        'content' => $csv
+        'content' => $csv,
+        'empty' => false
     ];
 }
 
 // Handle backup request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
-    $tables = ['admin', 'userss', 'dental_patients', 'confirmed_appointments'];
-    $backupFiles = [];
+    // Only backup confirmed_appointments table
+    $table = 'confirmed_appointments';
+    $backupFile = exportTableToCSV($pdo, $table);
     
-    foreach ($tables as $table) {
-        $backupFiles[] = exportTableToCSV($pdo, $table);
-    }
-    
-    // Create a zip file
-    $zipname = 'dental_clinic_backup_' . date('Y-m-d_H-i-s') . '.zip';
-    $zip = new ZipArchive();
-    
-    if ($zip->open($zipname, ZipArchive::CREATE) === TRUE) {
-        foreach ($backupFiles as $file) {
-            $zip->addFromString($file['filename'], $file['content']);
-        }
-        $zip->close();
-        
-        // Download the zip file
-        header('Content-Type: application/zip');
-        header('Content-Disposition: attachment; filename="' . $zipname . '"');
-        header('Content-Length: ' . filesize($zipname));
-        readfile($zipname);
-        
-        // Delete the zip file
-        unlink($zipname);
-        exit;
+    // Check if table is empty
+    if ($backupFile['empty']) {
+        $message = [
+            'type' => 'warning',
+            'text' => 'There are no current appointments to backup. The confirmed_appointments table is empty.'
+        ];
     } else {
-        $error_message = "Failed to create backup zip file.";
+        // Create a zip file
+        $zipname = 'appointments_backup_' . date('Y-m-d_H-i-s') . '.zip';
+        $zip = new ZipArchive();
+        
+        if ($zip->open($zipname, ZipArchive::CREATE) === TRUE) {
+            $zip->addFromString($backupFile['filename'], $backupFile['content']);
+            $zip->close();
+            
+            // Download the zip file
+            header('Content-Type: application/zip');
+            header('Content-Disposition: attachment; filename="' . $zipname . '"');
+            header('Content-Length: ' . filesize($zipname));
+            readfile($zipname);
+            
+            // Delete the zip file
+            unlink($zipname);
+            
+            // This message won't be seen because we're sending a file download
+            // But we'll set it anyway in case we change the flow later
+            $message = [
+                'type' => 'success',
+                'text' => 'Backup of confirmed appointments was successful!'
+            ];
+            
+            exit;
+        } else {
+            $message = [
+                'type' => 'danger',
+                'text' => 'Failed to create backup zip file.'
+            ];
+        }
     }
 }
 ?>
@@ -119,15 +141,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
         <h1>Database Backup</h1>
         
         <?php 
-        if (isset($error_message)) {
-            echo '<div class="alert alert-danger">' . $error_message . '</div>';
+        if (isset($message)) {
+            echo '<div class="alert alert-' . $message['type'] . '">' . $message['text'] . '</div>';
         }
         ?>
         
         <div class="card">
             <div class="card-body">
                 <h5 class="card-title">Create Backup</h5>
-                <p class="card-text">This will create a backup of all database tables in CSV format and download them as a ZIP file.</p>
+                <p class="card-text">This will create a backup of the confirmed appointments table in CSV format and download it as a ZIP file.</p>
                 <form method="POST">
                     <button type="submit" name="backup" class="btn btn-primary">Create Backup</button>
                     <a href="admin_dashboard.php" class="btn btn-secondary">Back to Dashboard</a>
