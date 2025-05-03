@@ -5,6 +5,7 @@ require_once "config.php";
 // Define variables and initialize with empty values
 $username = $password = $confirm_password = $full_name = $email = $phone_number = "";
 $username_err = $password_err = $confirm_password_err = $terms_err = $full_name_err = $email_err = $phone_number_err = "";
+$success_message = "";
  
 // Processing form data when form is submitted
 if($_SERVER["REQUEST_METHOD"] == "POST"){
@@ -95,8 +96,8 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
        empty($full_name_err) && empty($email_err) && empty($phone_number_err)){
         
         // Prepare an insert statement
-        $sql = "INSERT INTO userss (username, password, full_name, email, phone_number) 
-                VALUES (:username, :password, :full_name, :email, :phone_number)";
+        $sql = "INSERT INTO userss (username, password, full_name, email, phone_number, is_approved, is_activated) 
+                VALUES (:username, :password, :full_name, :email, :phone_number, FALSE, FALSE)";
          
         if($stmt = $pdo->prepare($sql)){
             // Bind variables to the prepared statement as parameters
@@ -115,8 +116,11 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
             
             // Attempt to execute the prepared statement
             if($stmt->execute()){
-                // Redirect to login page
-                header("location: index.php");
+                // Success message
+                $success_message = "Your account has been created and is pending approval by an administrator. You will receive an email when your account is approved.";
+                
+                // Clear form data after successful submission
+                $username = $password = $confirm_password = $full_name = $email = $phone_number = "";
             } else{
                 echo "Oops! Something went wrong. Please try again later.";
             }
@@ -209,6 +213,14 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
             cursor: pointer;
             text-decoration: underline;
         }
+        .alert-success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+        }
     </style>
 </head>
 <body>
@@ -216,6 +228,12 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
         <h1>LA PLAZA DENTISTA</h1>
         <h2 class="text-center">Sign Up</h2>
         <p class="text-center">Please fill this form to create an account.</p>
+        
+        <?php if(!empty($success_message)): ?>
+            <div class="alert alert-success"><?php echo $success_message; ?></div>
+            <p class="text-center">You can <a href="index.php">login here</a> once your account is approved.</p>
+        <?php else: ?>
+        
         <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>" method="post">
             <div class="form-group">
                 <label>Full Name</label>
@@ -263,6 +281,8 @@ if($_SERVER["REQUEST_METHOD"] == "POST"){
             </div>
             <p class="text-center">Already have an account? <a href="index.php">Login here</a>.</p>
         </form>
+        
+        <?php endif; ?>
     </div>    
 
     <!-- Terms and Conditions Modal -->
