@@ -10,35 +10,16 @@ if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || !isset($_S
 
 // Function to create a PostgreSQL database backup using pg_dump
 function createPostgresBackup($pdo, $tableName = null) {
-    // We need to get database credentials from config.php
-    // Since we're including config.php at the top, we can use global variables
-    // that are likely defined there, such as $db_host, $db_name, $db_user, $db_password
-    
-    // These variable names might be different in your config.php
-    // Adjust them according to your actual configuration
+    // Access the database credentials from config.php
+    // You mentioned they are defined there, so let's use them directly
     global $db_host, $db_name, $db_user, $db_password;
     
-    // If globals aren't available, try to extract from DSN
-    if (!isset($db_host) || !isset($db_name) || !isset($db_user)) {
-        try {
-            // Get DSN attributes
-            $dsn = $pdo->getAttribute(PDO::ATTR_CONNECTION_STATUS);
-            preg_match('/host=([^;]+);.*dbname=([^;]+)/', $dsn, $matches);
-            
-            // Default values if not found
-            $db_host = isset($matches[1]) ? $matches[1] : 'localhost';
-            $db_name = isset($matches[2]) ? $matches[2] : '';
-            
-            // We can't reliably get username from PDO, so use a default if not set
-            if (!isset($db_user)) {
-                $db_user = 'postgres'; // Default PostgreSQL username
-            }
-        } catch (Exception $e) {
-            // If we can't get connection info, use defaults
-            $db_host = 'localhost';
-            $db_name = '';
-            $db_user = 'postgres';
-        }
+    // Check if credentials are available
+    if (empty($db_host) || empty($db_name) || empty($db_user)) {
+        return [
+            'success' => false,
+            'error' => 'Database credentials are not properly defined in config.php'
+        ];
     }
     
     $timestamp = date('Y-m-d_H-i-s');
@@ -58,8 +39,33 @@ function createPostgresBackup($pdo, $tableName = null) {
     }
     $backupFile .= '_' . $timestamp . '.sql';
     
-    // Build the pg_dump command
-    $command = "PGPASSWORD='" . escapeshellarg($db_password) . "' pg_dump -h " . escapeshellarg($db_host) . " -U " . escapeshellarg($db_user) . " ";
+    // First, check if pg_dump is installed
+    exec('which pg_dump', $pgDumpPath, $returnCode);
+    
+    if ($returnCode !== 0) {
+        return [
+            'success' => false,
+            'error' => 'pg_dump command not found. Please install PostgreSQL client tools.'
+        ];
+    }
+    
+    $pgDumpCmd = trim($pgDumpPath[0]); // Get the full path to pg_dump
+    
+    // If pg_dump path is empty, try with just 'pg_dump'
+    if (empty($pgDumpCmd)) {
+        $pgDumpCmd = 'pg_dump';
+    }
+    
+    // Build the pg_dump command with proper string handling
+    $command = '';
+    
+    // Add password as environment variable if it exists
+    if (!empty($db_password)) {
+        $command .= "PGPASSWORD=" . escapeshellarg($db_password) . " ";
+    }
+    
+    // Add the pg_dump command with host and user
+    $command .= $pgDumpCmd . " -h " . escapeshellarg($db_host) . " -U " . escapeshellarg($db_user) . " ";
     
     // If a specific table is requested, add it to the command
     if ($tableName) {
@@ -69,6 +75,9 @@ function createPostgresBackup($pdo, $tableName = null) {
     // Complete the command
     $command .= "-f " . escapeshellarg($backupFile) . " " . escapeshellarg($db_name) . " 2>&1";
     
+    // For debugging
+    $debug_info = "Command: " . $command;
+    
     // Execute the command
     exec($command, $output, $returnCode);
     
@@ -76,7 +85,7 @@ function createPostgresBackup($pdo, $tableName = null) {
         // Error occurred
         return [
             'success' => false,
-            'error' => implode("\n", $output)
+            'error' => implode("\n", $output) . "\n\nDebug info: " . $debug_info
         ];
     }
     
@@ -84,7 +93,7 @@ function createPostgresBackup($pdo, $tableName = null) {
     if (!file_exists($backupFile) || filesize($backupFile) === 0) {
         return [
             'success' => false,
-            'error' => 'Backup file was not created or is empty'
+            'error' => 'Backup file was not created or is empty. Debug info: ' . $debug_info
         ];
     }
     
@@ -126,7 +135,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
         header('Content-Length: ' . filesize($backupResult['filepath']));
         
         // Clear output buffer
-        ob_clean();
+        if (ob_get_level()) {
+            ob_end_clean();
+        }
         flush();
         
         // Read the file and output it to the browser
@@ -182,6 +193,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
             background-color: #6c757d;
             border: none;
         }
+        .debug-info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
     </style>
 </head>
 <body>
@@ -202,6 +222,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
                     <button type="submit" name="backup" class="btn btn-primary">Create Backup</button>
                     <a href="admin_dashboard.php" class="btn btn-secondary">Back to Dashboard</a>
                 </form>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-body">
+                <h5 class="card-title">Troubleshooting</h5>
+                <p>If you're seeing "pg_dump: not found", you need to install PostgreSQL client tools:</p>
+                <div class="debug-info">
+                    # For Debian/Ubuntu:
+                    sudo apt-get update
+                    sudo apt-get install postgresql-client
+                    
+                    # For CentOS/RHEL:
+                    sudo yum install postgresql
+                </div>
             </div>
         </div>
     </div>
