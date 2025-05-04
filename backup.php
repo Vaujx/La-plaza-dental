@@ -8,91 +8,127 @@ if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || !isset($_S
     exit;
 }
 
-// Function to export table data to CSV
-function exportTableToCSV($pdo, $tableName) {
-    $filename = $tableName . '_' . date('Y-m-d_H-i-s') . '.csv';
+// Extract database connection details from PDO
+function getDbCredentials($pdo) {
+    // Get DSN attributes
+    $dsn = $pdo->getAttribute(PDO::ATTR_CONNECTION_STATUS);
+    preg_match('/host=([^;]+);.*dbname=([^;]+)/', $dsn, $matches);
     
-    // Get column names
-    $stmt = $pdo->prepare("SELECT column_name FROM information_schema.columns WHERE table_name = :tableName ORDER BY ordinal_position");
-    $stmt->bindParam(':tableName', $tableName, PDO::PARAM_STR);
-    $stmt->execute();
-    $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    // Default values if not found
+    $host = isset($matches[1]) ? $matches[1] : 'localhost';
+    $dbname = isset($matches[2]) ? $matches[2] : '';
     
-    // Get table data
-    $stmt = $pdo->prepare("SELECT * FROM $tableName");
-    $stmt->execute();
-    $data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // Get username from PDO
+    $username = $pdo->getAttribute(PDO::ATTR_USERNAME);
     
-    // Check if table is empty
-    if (empty($data)) {
+    return [
+        'host' => $host,
+        'dbname' => $dbname,
+        'username' => $username
+    ];
+}
+
+// Function to create a PostgreSQL database backup using pg_dump
+function createPostgresBackup($pdo, $tableName = null) {
+    $credentials = getDbCredentials($pdo);
+    $timestamp = date('Y-m-d_H-i-s');
+    
+    // Create a temporary directory for the backup
+    $tempDir = sys_get_temp_dir() . '/pg_backup_' . uniqid();
+    if (!file_exists($tempDir)) {
+        mkdir($tempDir, 0755, true);
+    }
+    
+    // Set the backup filename
+    $backupFile = $tempDir . '/backup_' . $credentials['dbname'];
+    if ($tableName) {
+        $backupFile .= '_' . $tableName;
+    }
+    $backupFile .= '_' . $timestamp . '.sql';
+    
+    // Build the pg_dump command
+    $command = "pg_dump -h {$credentials['host']} -U {$credentials['username']} ";
+    
+    // If a specific table is requested, add it to the command
+    if ($tableName) {
+        $command .= "-t {$tableName} ";
+    }
+    
+    // Complete the command
+    $command .= "-f \"{$backupFile}\" {$credentials['dbname']} 2>&1";
+    
+    // Execute the command
+    exec($command, $output, $returnCode);
+    
+    if ($returnCode !== 0) {
+        // Error occurred
         return [
-            'empty' => true
+            'success' => false,
+            'error' => implode("\n", $output)
         ];
     }
     
-    // Create CSV content
-    $output = fopen('php://temp', 'w');
-    fputcsv($output, $columns);
-    
-    foreach ($data as $row) {
-        fputcsv($output, $row);
+    // Check if the backup file was created and has content
+    if (!file_exists($backupFile) || filesize($backupFile) === 0) {
+        return [
+            'success' => false,
+            'error' => 'Backup file was not created or is empty'
+        ];
     }
     
-    rewind($output);
-    $csv = stream_get_contents($output);
-    fclose($output);
-    
     return [
-        'filename' => $filename,
-        'content' => $csv,
-        'empty' => false
+        'success' => true,
+        'filename' => basename($backupFile),
+        'filepath' => $backupFile,
+        'tempdir' => $tempDir
     ];
+}
+
+// Function to clean up temporary files
+function cleanupTempFiles($tempDir) {
+    if (is_dir($tempDir)) {
+        $files = glob($tempDir . '/*');
+        foreach ($files as $file) {
+            if (is_file($file)) {
+                unlink($file);
+            }
+        }
+        rmdir($tempDir);
+    }
 }
 
 // Handle backup request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
     // Only backup confirmed_appointments table
     $table = 'confirmed_appointments';
-    $backupFile = exportTableToCSV($pdo, $table);
+    $backupResult = createPostgresBackup($pdo, $table);
     
-    // Check if table is empty
-    if ($backupFile['empty']) {
-        $message = [
-            'type' => 'warning',
-            'text' => 'There are no current appointments to backup. The confirmed_appointments table is empty.'
-        ];
-    } else {
-        // Create a zip file
-        $zipname = 'appointments_backup_' . date('Y-m-d_H-i-s') . '.zip';
-        $zip = new ZipArchive();
+    if ($backupResult['success']) {
+        // Set headers for file download
+        header('Content-Description: File Transfer');
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="' . $backupResult['filename'] . '"');
+        header('Expires: 0');
+        header('Cache-Control: must-revalidate');
+        header('Pragma: public');
+        header('Content-Length: ' . filesize($backupResult['filepath']));
         
-        if ($zip->open($zipname, ZipArchive::CREATE) === TRUE) {
-            $zip->addFromString($backupFile['filename'], $backupFile['content']);
-            $zip->close();
-            
-            // Download the zip file
-            header('Content-Type: application/zip');
-            header('Content-Disposition: attachment; filename="' . $zipname . '"');
-            header('Content-Length: ' . filesize($zipname));
-            readfile($zipname);
-            
-            // Delete the zip file
-            unlink($zipname);
-            
-            // This message won't be seen because we're sending a file download
-            // But we'll set it anyway in case we change the flow later
-            $message = [
-                'type' => 'success',
-                'text' => 'Backup of confirmed appointments was successful!'
-            ];
-            
-            exit;
-        } else {
-            $message = [
-                'type' => 'danger',
-                'text' => 'Failed to create backup zip file.'
-            ];
-        }
+        // Clear output buffer
+        ob_clean();
+        flush();
+        
+        // Read the file and output it to the browser
+        readfile($backupResult['filepath']);
+        
+        // Clean up temporary files
+        cleanupTempFiles($backupResult['tempdir']);
+        
+        exit;
+    } else {
+        $message = [
+            'type' => 'danger',
+            'text' => 'Backup failed: ' . $backupResult['error']
+        ];
     }
 }
 ?>
@@ -149,7 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
         <div class="card">
             <div class="card-body">
                 <h5 class="card-title">Create Backup</h5>
-                <p class="card-text">This will create a backup of the confirmed appointments table in CSV format and download it as a ZIP file.</p>
+                <p class="card-text">This will create a backup of the confirmed appointments table using PostgreSQL's pg_dump utility.</p>
                 <form method="POST">
                     <button type="submit" name="backup" class="btn btn-primary">Create Backup</button>
                     <a href="admin_dashboard.php" class="btn btn-secondary">Back to Dashboard</a>
