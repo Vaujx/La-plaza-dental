@@ -8,138 +8,7 @@ if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || !isset($_S
     exit;
 }
 
-// Function to create a PostgreSQL database backup using pg_dump
-function createPostgresBackup($pdo, $tableName = null) {
-    // Use the constants from config.php
-    $db_host = DB_SERVER;
-    $db_port = DB_PORT;
-    $db_name = DB_NAME;
-    $db_user = DB_USERNAME;
-    $db_password = DB_PASSWORD;
-    
-    // Check if credentials are available
-    if (empty($db_host) || empty($db_name) || empty($db_user)) {
-        return [
-            'success' => false,
-            'error' => 'Database credentials are not properly defined'
-        ];
-    }
-    
-    $timestamp = date('Y-m-d_H-i-s');
-    
-    // Create a temporary directory for the backup
-    $tempDir = sys_get_temp_dir() . '/pg_backup_' . uniqid();
-    if (!file_exists($tempDir)) {
-        mkdir($tempDir, 0755, true);
-    }
-    
-    // Set the backup filename
-    $backupFile = $tempDir . '/backup_';
-    if ($tableName) {
-        $backupFile .= $tableName;
-    } else {
-        $backupFile .= $db_name;
-    }
-    $backupFile .= '_' . $timestamp . '.sql';
-    
-    // First, check if pg_dump is installed
-    exec('which pg_dump 2>/dev/null', $pgDumpPath, $returnCode);
-    
-    if ($returnCode !== 0) {
-        // Try to find pg_dump in common locations
-        $commonPaths = [
-            '/usr/bin/pg_dump',
-            '/usr/local/bin/pg_dump',
-            '/usr/local/pgsql/bin/pg_dump',
-            '/opt/postgresql/bin/pg_dump'
-        ];
-        
-        $pgDumpCmd = '';
-        foreach ($commonPaths as $path) {
-            if (file_exists($path)) {
-                $pgDumpCmd = $path;
-                break;
-            }
-        }
-        
-        if (empty($pgDumpCmd)) {
-            return [
-                'success' => false,
-                'error' => 'pg_dump command not found. Please install PostgreSQL client tools.'
-            ];
-        }
-    } else {
-        $pgDumpCmd = trim($pgDumpPath[0]); // Get the full path to pg_dump
-        
-        // If pg_dump path is empty, try with just 'pg_dump'
-        if (empty($pgDumpCmd)) {
-            $pgDumpCmd = 'pg_dump';
-        }
-    }
-    
-    // Build the pg_dump command with proper string handling
-    $command = '';
-    
-    // Add password as environment variable if it exists
-    if (!empty($db_password)) {
-        $command .= "PGPASSWORD=" . escapeshellarg($db_password) . " ";
-    }
-    
-    // Add the pg_dump command with host, port, and user
-    $command .= $pgDumpCmd . " -h " . escapeshellarg($db_host) . " -p " . escapeshellarg($db_port) . " -U " . escapeshellarg($db_user) . " ";
-    
-    // If a specific table is requested, add it to the command
-    if ($tableName) {
-        $command .= "-t " . escapeshellarg($tableName) . " ";
-    }
-    
-    // Complete the command
-    $command .= "-f " . escapeshellarg($backupFile) . " " . escapeshellarg($db_name) . " 2>&1";
-    
-    // For debugging
-    $debug_info = "Command: " . $command;
-    
-    // Execute the command
-    exec($command, $output, $returnCode);
-    
-    if ($returnCode !== 0) {
-        // Error occurred
-        return [
-            'success' => false,
-            'error' => implode("\n", $output) . "\n\nDebug info: " . $debug_info
-        ];
-    }
-    
-    // Check if the backup file was created and has content
-    if (!file_exists($backupFile) || filesize($backupFile) === 0) {
-        return [
-            'success' => false,
-            'error' => 'Backup file was not created or is empty. Debug info: ' . $debug_info
-        ];
-    }
-    
-    return [
-        'success' => true,
-        'filename' => basename($backupFile),
-        'filepath' => $backupFile,
-        'tempdir' => $tempDir
-    ];
-}
-
-// Function to clean up temporary files
-function cleanupTempFiles($tempDir) {
-    if (is_dir($tempDir)) {
-        $files = glob($tempDir . '/*');
-        foreach ($files as $file) {
-            if (is_file($file)) {
-                unlink($file);
-            }
-        }
-        rmdir($tempDir);
-    }
-}
-
-// PHP-only backup method for confirmed_appointments table
+// Enhanced PHP backup method for confirmed_appointments table
 function createPHPBackup($pdo, $tableName) {
     $timestamp = date('Y-m-d_H-i-s');
     $filename = $tableName . '_backup_' . $timestamp . '.sql';
@@ -166,16 +35,22 @@ function createPHPBackup($pdo, $tableName) {
         // Start building SQL file
         $sql = "-- PostgreSQL database backup\n";
         $sql .= "-- Table: " . $tableName . "\n";
-        $sql .= "-- Generated: " . date('Y-m-d H:i:s') . "\n\n";
+        $sql .= "-- Generated: " . date('Y-m-d H:i:s') . "\n";
+        $sql .= "-- Hosting: Render\n\n";
         
-        // Get primary key information
-        $stmt = $pdo->prepare("SELECT a.attname as column_name
-                              FROM pg_index i
-                              JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-                              WHERE i.indrelid = :tableName::regclass AND i.indisprimary");
-        $stmt->bindParam(':tableName', $tableName, PDO::PARAM_STR);
-        $stmt->execute();
-        $primaryKeys = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        // Try to get primary key information
+        try {
+            $stmt = $pdo->prepare("SELECT a.attname as column_name
+                                  FROM pg_index i
+                                  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                                  WHERE i.indrelid = :tableName::regclass AND i.indisprimary");
+            $stmt->bindParam(':tableName', $tableName, PDO::PARAM_STR);
+            $stmt->execute();
+            $primaryKeys = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        } catch (PDOException $e) {
+            // If we can't get primary keys, just continue without them
+            $primaryKeys = [];
+        }
         
         // Create DROP TABLE statement (commented out for safety)
         $sql .= "-- DROP TABLE IF EXISTS " . $tableName . ";\n\n";
@@ -221,6 +96,7 @@ function createPHPBackup($pdo, $tableName) {
         
         if (!empty($rows)) {
             $sql .= "-- Table data\n";
+            $sql .= "-- " . count($rows) . " records found\n";
             
             foreach ($rows as $row) {
                 $columnNames = array_keys($row);
@@ -237,6 +113,8 @@ function createPHPBackup($pdo, $tableName) {
                 
                 $sql .= "INSERT INTO " . $tableName . " (" . implode(", ", $columnNames) . ") VALUES (" . implode(", ", $columnValues) . ");\n";
             }
+        } else {
+            $sql .= "-- No data found in table\n";
         }
         
         // Write to file
@@ -245,7 +123,8 @@ function createPHPBackup($pdo, $tableName) {
         return [
             'success' => true,
             'filename' => $filename,
-            'filepath' => $tempFile
+            'filepath' => $tempFile,
+            'records' => count($rows)
         ];
     } catch (PDOException $e) {
         return [
@@ -338,43 +217,6 @@ function restoreBackup($pdo, $filePath) {
 
 // Handle backup request
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
-    // Only backup confirmed_appointments table
-    $table = 'confirmed_appointments';
-    $backupResult = createPostgresBackup($pdo, $table);
-    
-    if ($backupResult['success']) {
-        // Set headers for file download
-        header('Content-Description: File Transfer');
-        header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="' . $backupResult['filename'] . '"');
-        header('Expires: 0');
-        header('Cache-Control: must-revalidate');
-        header('Pragma: public');
-        header('Content-Length: ' . filesize($backupResult['filepath']));
-        
-        // Clear output buffer
-        if (ob_get_level()) {
-            ob_end_clean();
-        }
-        flush();
-        
-        // Read the file and output it to the browser
-        readfile($backupResult['filepath']);
-        
-        // Clean up temporary files
-        cleanupTempFiles($backupResult['tempdir']);
-        
-        exit;
-    } else {
-        $message = [
-            'type' => 'danger',
-            'text' => 'Backup failed: ' . $backupResult['error']
-        ];
-    }
-}
-
-// Handle PHP backup request
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['php_backup'])) {
     $table = 'confirmed_appointments';
     $backupResult = createPHPBackup($pdo, $table);
     
@@ -404,7 +246,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['php_backup'])) {
     } else {
         $message = [
             'type' => 'danger',
-            'text' => 'PHP Backup failed: ' . $backupResult['error']
+            'text' => 'Backup failed: ' . $backupResult['error']
         ];
     }
 }
@@ -499,26 +341,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore']) && isset($
             background-color: #6c757d;
             border: none;
         }
-        .debug-info {
-            margin-top: 20px;
-            padding: 10px;
-            background-color: #f8f9fa;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-family: monospace;
-            white-space: pre-wrap;
-        }
         .card {
             margin-bottom: 20px;
         }
         .custom-file-label::after {
             content: "Browse";
         }
+        .render-note {
+            background-color: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 10px 15px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Database Backup & Restore</h1>
+        
+        <div class="render-note">
+            <strong>Note:</strong> This backup tool is optimized for Render hosting and uses PHP to create SQL backups of your confirmed appointments data.
+        </div>
         
         <?php 
         if (isset($message)) {
@@ -531,20 +375,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore']) && isset($
                 <h5 class="mb-0">Create Backup</h5>
             </div>
             <div class="card-body">
-                <p class="card-text">This will create a backup of the confirmed appointments table.</p>
+                <p class="card-text">This will create a backup of the confirmed appointments table. The backup file will be downloaded to your computer.</p>
                 
-                <div class="row">
-                    <div class="col-md-6">
-                        <form method="POST" class="mb-3">
-                            <button type="submit" name="backup" class="btn btn-primary btn-block">Create Backup (pg_dump)</button>
-                        </form>
-                    </div>
-                    <div class="col-md-6">
-                        <form method="POST" class="mb-3">
-                            <button type="submit" name="php_backup" class="btn btn-success btn-block">Create Backup (PHP Only)</button>
-                        </form>
-                    </div>
-                </div>
+                <form method="POST" class="mb-3">
+                    <button type="submit" name="backup" class="btn btn-primary btn-block">Create Backup</button>
+                </form>
             </div>
         </div>
         
@@ -571,7 +406,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore']) && isset($
             <a href="admin_dashboard.php" class="btn btn-secondary">Back to Dashboard</a>
         </div>
         
-       
+        <div class="card mt-4">
+            <div class="card-header bg-light">
+                <h5 class="mb-0">About Database Backups</h5>
+            </div>
+            <div class="card-body">
+                <p><strong>What gets backed up?</strong></p>
+                <ul>
+                    <li>All appointment data from the <code>confirmed_appointments</code> table</li>
+                    <li>Table structure including columns, data types, and constraints</li>
+                </ul>
+                
+                <p><strong>Backup Best Practices:</strong></p>
+                <ul>
+                    <li>Create regular backups (weekly or monthly)</li>
+                    <li>Store backup files in multiple secure locations</li>
+                    <li>Test restoring from backups periodically</li>
+                </ul>
+            </div>
+        </div>
     </div>
     
     <script>
