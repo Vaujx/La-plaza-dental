@@ -8,29 +8,39 @@ if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || !isset($_S
     exit;
 }
 
-// Extract database connection details from PDO
-function getDbCredentials($pdo) {
-    // Get DSN attributes
-    $dsn = $pdo->getAttribute(PDO::ATTR_CONNECTION_STATUS);
-    preg_match('/host=([^;]+);.*dbname=([^;]+)/', $dsn, $matches);
-    
-    // Default values if not found
-    $host = isset($matches[1]) ? $matches[1] : 'localhost';
-    $dbname = isset($matches[2]) ? $matches[2] : '';
-    
-    // Get username from PDO
-    $username = $pdo->getAttribute(PDO::ATTR_USERNAME);
-    
-    return [
-        'host' => $host,
-        'dbname' => $dbname,
-        'username' => $username
-    ];
-}
-
 // Function to create a PostgreSQL database backup using pg_dump
 function createPostgresBackup($pdo, $tableName = null) {
-    $credentials = getDbCredentials($pdo);
+    // We need to get database credentials from config.php
+    // Since we're including config.php at the top, we can use global variables
+    // that are likely defined there, such as $db_host, $db_name, $db_user, $db_password
+    
+    // These variable names might be different in your config.php
+    // Adjust them according to your actual configuration
+    global $db_host, $db_name, $db_user, $db_password;
+    
+    // If globals aren't available, try to extract from DSN
+    if (!isset($db_host) || !isset($db_name) || !isset($db_user)) {
+        try {
+            // Get DSN attributes
+            $dsn = $pdo->getAttribute(PDO::ATTR_CONNECTION_STATUS);
+            preg_match('/host=([^;]+);.*dbname=([^;]+)/', $dsn, $matches);
+            
+            // Default values if not found
+            $db_host = isset($matches[1]) ? $matches[1] : 'localhost';
+            $db_name = isset($matches[2]) ? $matches[2] : '';
+            
+            // We can't reliably get username from PDO, so use a default if not set
+            if (!isset($db_user)) {
+                $db_user = 'postgres'; // Default PostgreSQL username
+            }
+        } catch (Exception $e) {
+            // If we can't get connection info, use defaults
+            $db_host = 'localhost';
+            $db_name = '';
+            $db_user = 'postgres';
+        }
+    }
+    
     $timestamp = date('Y-m-d_H-i-s');
     
     // Create a temporary directory for the backup
@@ -40,22 +50,24 @@ function createPostgresBackup($pdo, $tableName = null) {
     }
     
     // Set the backup filename
-    $backupFile = $tempDir . '/backup_' . $credentials['dbname'];
+    $backupFile = $tempDir . '/backup_';
     if ($tableName) {
-        $backupFile .= '_' . $tableName;
+        $backupFile .= $tableName;
+    } else {
+        $backupFile .= $db_name;
     }
     $backupFile .= '_' . $timestamp . '.sql';
     
     // Build the pg_dump command
-    $command = "pg_dump -h {$credentials['host']} -U {$credentials['username']} ";
+    $command = "PGPASSWORD='" . escapeshellarg($db_password) . "' pg_dump -h " . escapeshellarg($db_host) . " -U " . escapeshellarg($db_user) . " ";
     
     // If a specific table is requested, add it to the command
     if ($tableName) {
-        $command .= "-t {$tableName} ";
+        $command .= "-t " . escapeshellarg($tableName) . " ";
     }
     
     // Complete the command
-    $command .= "-f \"{$backupFile}\" {$credentials['dbname']} 2>&1";
+    $command .= "-f " . escapeshellarg($backupFile) . " " . escapeshellarg($db_name) . " 2>&1";
     
     // Execute the command
     exec($command, $output, $returnCode);
