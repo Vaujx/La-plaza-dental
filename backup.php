@@ -10,15 +10,18 @@ if(!isset($_SESSION["loggedin"]) || $_SESSION["loggedin"] !== true || !isset($_S
 
 // Function to create a PostgreSQL database backup using pg_dump
 function createPostgresBackup($pdo, $tableName = null) {
-    // Access the database credentials from config.php
-    // You mentioned they are defined there, so let's use them directly
-    global $db_host, $db_name, $db_user, $db_password;
+    // Use the constants from config.php
+    $db_host = DB_SERVER;
+    $db_port = DB_PORT;
+    $db_name = DB_NAME;
+    $db_user = DB_USERNAME;
+    $db_password = DB_PASSWORD;
     
     // Check if credentials are available
     if (empty($db_host) || empty($db_name) || empty($db_user)) {
         return [
             'success' => false,
-            'error' => 'Database credentials are not properly defined in config.php'
+            'error' => 'Database credentials are not properly defined'
         ];
     }
     
@@ -40,20 +43,38 @@ function createPostgresBackup($pdo, $tableName = null) {
     $backupFile .= '_' . $timestamp . '.sql';
     
     // First, check if pg_dump is installed
-    exec('which pg_dump', $pgDumpPath, $returnCode);
+    exec('which pg_dump 2>/dev/null', $pgDumpPath, $returnCode);
     
     if ($returnCode !== 0) {
-        return [
-            'success' => false,
-            'error' => 'pg_dump command not found. Please install PostgreSQL client tools.'
+        // Try to find pg_dump in common locations
+        $commonPaths = [
+            '/usr/bin/pg_dump',
+            '/usr/local/bin/pg_dump',
+            '/usr/local/pgsql/bin/pg_dump',
+            '/opt/postgresql/bin/pg_dump'
         ];
-    }
-    
-    $pgDumpCmd = trim($pgDumpPath[0]); // Get the full path to pg_dump
-    
-    // If pg_dump path is empty, try with just 'pg_dump'
-    if (empty($pgDumpCmd)) {
-        $pgDumpCmd = 'pg_dump';
+        
+        $pgDumpCmd = '';
+        foreach ($commonPaths as $path) {
+            if (file_exists($path)) {
+                $pgDumpCmd = $path;
+                break;
+            }
+        }
+        
+        if (empty($pgDumpCmd)) {
+            return [
+                'success' => false,
+                'error' => 'pg_dump command not found. Please install PostgreSQL client tools.'
+            ];
+        }
+    } else {
+        $pgDumpCmd = trim($pgDumpPath[0]); // Get the full path to pg_dump
+        
+        // If pg_dump path is empty, try with just 'pg_dump'
+        if (empty($pgDumpCmd)) {
+            $pgDumpCmd = 'pg_dump';
+        }
     }
     
     // Build the pg_dump command with proper string handling
@@ -64,8 +85,8 @@ function createPostgresBackup($pdo, $tableName = null) {
         $command .= "PGPASSWORD=" . escapeshellarg($db_password) . " ";
     }
     
-    // Add the pg_dump command with host and user
-    $command .= $pgDumpCmd . " -h " . escapeshellarg($db_host) . " -U " . escapeshellarg($db_user) . " ";
+    // Add the pg_dump command with host, port, and user
+    $command .= $pgDumpCmd . " -h " . escapeshellarg($db_host) . " -p " . escapeshellarg($db_port) . " -U " . escapeshellarg($db_user) . " ";
     
     // If a specific table is requested, add it to the command
     if ($tableName) {
@@ -154,6 +175,120 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
         ];
     }
 }
+
+// Alternative PHP-only backup method
+function createPHPBackup($pdo, $tableName) {
+    $timestamp = date('Y-m-d_H-i-s');
+    $filename = $tableName . '_backup_' . $timestamp . '.sql';
+    $tempFile = sys_get_temp_dir() . '/' . $filename;
+    
+    try {
+        // Get table structure
+        $stmt = $pdo->prepare("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = :tableName ORDER BY ordinal_position");
+        $stmt->bindParam(':tableName', $tableName, PDO::PARAM_STR);
+        $stmt->execute();
+        $columns = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($columns)) {
+            return [
+                'success' => false,
+                'error' => 'Table not found or has no columns'
+            ];
+        }
+        
+        // Start building SQL file
+        $sql = "-- PostgreSQL database backup\n";
+        $sql .= "-- Table: " . $tableName . "\n";
+        $sql .= "-- Generated: " . date('Y-m-d H:i:s') . "\n\n";
+        
+        // Create table structure
+        $sql .= "-- Table structure\n";
+        $sql .= "CREATE TABLE IF NOT EXISTS " . $tableName . " (\n";
+        
+        $columnDefs = [];
+        foreach ($columns as $column) {
+            $columnDefs[] = "    " . $column['column_name'] . " " . $column['data_type'];
+        }
+        
+        $sql .= implode(",\n", $columnDefs);
+        $sql .= "\n);\n\n";
+        
+        // Get table data
+        $stmt = $pdo->prepare("SELECT * FROM " . $tableName);
+        $stmt->execute();
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (!empty($rows)) {
+            $sql .= "-- Table data\n";
+            
+            foreach ($rows as $row) {
+                $columnNames = array_keys($row);
+                $columnValues = array_values($row);
+                
+                // Escape values
+                foreach ($columnValues as &$value) {
+                    if ($value === null) {
+                        $value = 'NULL';
+                    } else {
+                        $value = "'" . str_replace("'", "''", $value) . "'";
+                    }
+                }
+                
+                $sql .= "INSERT INTO " . $tableName . " (" . implode(", ", $columnNames) . ") VALUES (" . implode(", ", $columnValues) . ");\n";
+            }
+        }
+        
+        // Write to file
+        file_put_contents($tempFile, $sql);
+        
+        return [
+            'success' => true,
+            'filename' => $filename,
+            'filepath' => $tempFile
+        ];
+    } catch (PDOException $e) {
+        return [
+            'success' => false,
+            'error' => 'Database error: ' . $e->getMessage()
+        ];
+    }
+}
+
+// Add a button for PHP-only backup
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['php_backup'])) {
+    $table = 'confirmed_appointments';
+    $backupResult = createPHPBackup($pdo, $table);
+    
+    if ($backupResult['success']) {
+        // Set headers for file download
+        header('Content-Description: File Transfer');
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="' . $backupResult['filename'] . '"');
+        header('Expires: 0');
+        header('Cache-Control: must-revalidate');
+        header('Pragma: public');
+        header('Content-Length: ' . filesize($backupResult['filepath']));
+        
+        // Clear output buffer
+        if (ob_get_level()) {
+            ob_end_clean();
+        }
+        flush();
+        
+        // Read the file and output it to the browser
+        readfile($backupResult['filepath']);
+        
+        // Clean up
+        unlink($backupResult['filepath']);
+        
+        exit;
+    } else {
+        $message = [
+            'type' => 'danger',
+            'text' => 'PHP Backup failed: ' . $backupResult['error']
+        ];
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -217,28 +352,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['backup'])) {
         <div class="card">
             <div class="card-body">
                 <h5 class="card-title">Create Backup</h5>
-                <p class="card-text">This will create a backup of the confirmed appointments table using PostgreSQL's pg_dump utility.</p>
-                <form method="POST">
-                    <button type="submit" name="backup" class="btn btn-primary">Create Backup</button>
-                    <a href="admin_dashboard.php" class="btn btn-secondary">Back to Dashboard</a>
-                </form>
-            </div>
-        </div>
-        
-        <div class="card mt-4">
-            <div class="card-body">
-                <h5 class="card-title">Troubleshooting</h5>
-                <p>If you're seeing "pg_dump: not found", you need to install PostgreSQL client tools:</p>
-                <div class="debug-info">
-                    # For Debian/Ubuntu:
-                    sudo apt-get update
-                    sudo apt-get install postgresql-client
-                    
-                    # For CentOS/RHEL:
-                    sudo yum install postgresql
+                <p class="card-text">This will create a backup of the confirmed appointments table.</p>
+                
+                <div class="row">
+                    <div class="col-md-6">
+                        <form method="POST" class="mb-3">
+                            <button type="submit" name="backup" class="btn btn-primary btn-block">Create Backup (pg_dump)</button>
+                        </form>
+                    </div>
+                    <div class="col-md-6">
+                        <form method="POST" class="mb-3">
+                            <button type="submit" name="php_backup" class="btn btn-success btn-block">Create Backup (PHP Only)</button>
+                        </form>
+                    </div>
                 </div>
+                
+                <a href="admin_dashboard.php" class="btn btn-secondary">Back to Dashboard</a>
             </div>
-        </div>
+        </div>   
     </div>
 </body>
 </html>
